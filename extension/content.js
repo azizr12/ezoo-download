@@ -8,6 +8,9 @@
   let items = [];
   let open = false;
   let dismissed = false;
+  // where the user dragged the panel to, if they moved it themselves
+  let customPos = null;
+  let suppressClickUntil = 0;
   // Options > File Types > "Download panel for web players"
   let panel = { enabled: true, skipSites: [] };
   const hostMatches = (host, p) => {
@@ -100,6 +103,17 @@
 
   function place() {
     if (!host) return;
+    // once dragged, the panel stays where the user put it
+    if (customPos) {
+      const left = Math.max(8, Math.min(customPos.left, innerWidth - host.offsetWidth - 8));
+      const top = Math.max(8, Math.min(customPos.top, innerHeight - host.offsetHeight - 8));
+      customPos = { left, top };
+      host.style.position = "fixed";
+      host.style.left = `${left}px`;
+      host.style.top = `${top}px`;
+      host.style.right = "auto";
+      return;
+    }
     const v = biggestVideo();
     if (v) {
       const r = v.getBoundingClientRect();
@@ -131,9 +145,11 @@
         .wrap { font: 12px/1.3 "Segoe UI", system-ui, sans-serif; color: #1f2733; width: 230px; }
         .btn { display: flex; align-items: center; gap: 7px; color: #fff; border: 1px solid #0f4fb5;
                background: linear-gradient(#3f8cf5, #1d63d6); border-radius: 4px; padding: 5px 8px;
-               cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.35); font: inherit; font-weight: 600;
-               width: 100%; opacity: .88; transition: opacity .15s; }
+               cursor: grab; box-shadow: 0 2px 8px rgba(0,0,0,.35); font: inherit; font-weight: 600;
+               width: 100%; opacity: .88; transition: opacity .15s;
+               touch-action: none; user-select: none; -webkit-user-select: none; }
         .btn:hover { opacity: 1; background: linear-gradient(#4b96fa, #1a5bc7); }
+        .btn.dragging { cursor: grabbing; }
         .ico { width: 16px; height: 16px; flex: none; }
         .caret { font-size: 9px; opacity: .9; }
         .x { margin-left: auto; opacity: .8; padding: 0 2px; }
@@ -154,11 +170,50 @@
         <button class="btn" id="main"><svg class="ico" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7.5" fill="#fff"/><path d="M6.6 3.5h2.8v4.6h2.3L8 12 4.3 8.1h2.3z" fill="#1d63d6"/></svg><span id="label">Download this video</span><span class="caret">▼</span><span class="x" id="close" title="Hide">✕</span></button>
         <div class="list" id="list" hidden></div>
       </div>`;
-    root.getElementById("main").addEventListener("click", (e) => {
+    const main = root.getElementById("main");
+    let drag = null;
+    main.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || e.target.id === "close") return;
+      const r = host.getBoundingClientRect();
+      drag = { id: e.pointerId, x: e.clientX, y: e.clientY, left: r.left, top: r.top, moved: false };
+      try {
+        main.setPointerCapture(e.pointerId);
+      } catch {}
+    });
+    main.addEventListener("pointermove", (e) => {
+      if (!drag || drag.id !== e.pointerId) return;
+      const dx = e.clientX - drag.x;
+      const dy = e.clientY - drag.y;
+      if (!drag.moved && Math.abs(dx) + Math.abs(dy) < 4) return;
+      if (!drag.moved) {
+        drag.moved = true;
+        main.classList.add("dragging");
+      }
+      e.preventDefault();
+      customPos = { left: drag.left + dx, top: drag.top + dy };
+      place();
+    });
+    const endDrag = (e) => {
+      if (!drag || drag.id !== e.pointerId) return;
+      if (drag.moved) suppressClickUntil = Date.now() + 300;
+      drag = null;
+      main.classList.remove("dragging");
+      try {
+        main.releasePointerCapture(e.pointerId);
+      } catch {}
+    };
+    main.addEventListener("pointerup", endDrag);
+    main.addEventListener("pointercancel", endDrag);
+    main.addEventListener("click", (e) => {
       if (e.target.id === "close") {
         dismissed = true;
         host.remove();
         host = null;
+        return;
+      }
+      // a drag must not also open the menu / start a download
+      if (Date.now() < suppressClickUntil) {
+        suppressClickUntil = 0;
         return;
       }
       if (items.length === 1 && !items[0].disabled && !items[0].yt) {
